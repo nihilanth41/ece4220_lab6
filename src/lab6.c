@@ -15,13 +15,14 @@
 MODULE_LICENSE("GPL");
 
 #define PORTB_NUM_BUTTONS 6 // 0-5
-#define HW_IRQ 59
+const int hw_irq = 59;
 //software irq 63
 
-unsigned long *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
-unsigned long *PFDR, *PFDDR;
-unsigned long *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
-unsigned long *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
+RTIME period;
+volatile unsigned char *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
+volatile unsigned char *PFDR, *PFDDR;
+volatile unsigned char *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
+volatile unsigned char *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
 
 // Hardware interrupt IRQ = 59
 // rt_task <plays speaker>
@@ -30,47 +31,43 @@ unsigned long *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
 // Run when button interrupt triggered
 static void button_handler(unsigned int irq_num, void *cookie) {
 	// Disable interrupts 
-	rt_disable_irq(HW_IRQ);
+	rt_disable_irq(hw_irq);
 	// Check which button pressed
 	int i=0;
 	//for(i=0; i<PORTB_NUM_BUTTONS; i++)
 	//{
 	//	if( (*RawIntStsB & (1 << i)) != 0)
 	//	{
-	//		printk(KERN_INFO, "Button %d pressed\n", i);
+	//		printk(, "Button %d pressed\n", i);
 	//		break;
 	//	}
 	//}
-	printf("Button pressed\n");
+	printk("Button pressed\n");
 	
 	// Clear EOI register by *setting* the bit.
 	*GPIOBEOI |= (0x1F);
 	// Re-enable interrupts
-	rt_enable_irq(HW_IRQ);
+	rt_enable_irq(hw_irq);
 }
 
 int init_module(void) {
 	int i=0;
 	// Attempt to map file descriptor
-	BasePtr = (unsigned long *) __ioremap(0x80840000, 4096, 0);
-	if(NULL == BasePtr) 
-	{
-		printk(KERN_INFO "Unable to map memory space\n");
-		return -1;
-	}
-	// Map registers
-	PBDR = BasePtr + 1;
-	PBDDR = BasePtr + 5;
-	PFDR = BasePtr + 11;
-	PFDDR = BasePtr + 12;
-	GPIOBIntType1 = BasePtr + 32;
-	GPIOBIntType2 = BasePtr + 33;
-	GPIOBEOI = BasePtr + 34;
-	GPIOBIntEn = BasePtr + 35;
-	IntStsB = BasePtr + 36;
-	RawIntStsB = BasePtr + 37;
-	GPIOBDB = BasePtr + 38;
-	
+	BasePtr = (unsigned char *) __ioremap(0x80840000, 4096, 0);
+	PBDR = (unsigned char *) __ioremap(0x80840004, 4096, 0);
+	PBDDR = (unsigned char *) __ioremap(0x80840014, 4096, 0);
+	PFDR  = (unsigned char *) __ioremap(0x80840030, 4096, 0);
+	PFDDR = (unsigned char *) __ioremap(0x80840034, 4096, 0);
+	GPIOBIntType1 = (unsigned char *) __ioremap(0x808400AC, 4096, 0);
+	GPIOBIntType2 = (unsigned char *) __ioremap(0x808400B0, 4096, 0);
+	GPIOBEOI = (unsigned char *) __ioremap(0x808400B4, 4096, 0); 
+	GPIOBIntEn = (unsigned char *) __ioremap(0x808400B8, 4096, 0);
+	IntStsB = (unsigned char *) __ioremap(0x808400BC, 4096, 0);
+	RawIntStsB = (unsigned char *) __ioremap(0x808400C0, 4096, 0);
+	GPIOBDB = (unsigned char *) __ioremap(0x808400C4, 4096, 0);
+	rt_set_periodic_mode();
+	period = start_rt_timer(nano2count(1000000));
+
 	// Set push buttons as inputs
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
 	{
@@ -85,21 +82,21 @@ int init_module(void) {
 	*GPIOBIntEn |= (0x1F); // Enable interrupt on B0-B4
 	
 	// Attempt to attach handler
-	if(rt_request_irq(HW_IRQ, button_handler, NULL, 1) < 0)
+	if(rt_request_irq(hw_irq, button_handler, NULL, 1) < 0)
 	{
-		printk(KERN_INFO, "Unable to request IRQ\n");
+		printk("Unable to request IRQ\n");
 		return -1;
 	}
 	
 	// Enable interrupt
-	rt_enable_irq(HW_IRQ);
+	rt_enable_irq(hw_irq);
 
-	printk(KERN_INFO, "MODULE INSTALLED\n");
+	printk("MODULE INSTALLED\n");
 	return 0;
 }
 
 void cleanup_module(void) {
-	rt_release_irq(HW_IRQ);
+	rt_release_irq(hw_irq);
 	printk(KERN_INFO "MODULE REMOVED\n");
 	return;
 }
