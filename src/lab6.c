@@ -33,17 +33,14 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 	// Disable interrupts 
 	rt_disable_irq(hw_irq);
 	// Check which button pressed
+	// If RawIntSts == 1 then that button was pressed
 	int i=0;
-	//for(i=0; i<PORTB_NUM_BUTTONS; i++)
-	//{
-	//	if( (*RawIntStsB & (1 << i)) != 0)
-	//	{
-	//		printk(, "Button %d pressed\n", i);
-	//		break;
-	//	}
-	//}
-	printk("Button pressed\n");
-	
+	for(i=0; i<PORTB_NUM_BUTTONS; i++)
+		if( (*RawIntStsB & (1 << i)) != 0)
+		{
+			printk("Button %d pressed\n", i);
+			break;
+		}
 	// Clear EOI register by *setting* the bit.
 	*GPIOBEOI |= (0x1F);
 	// Re-enable interrupts
@@ -96,7 +93,8 @@ int init_module(void) {
 }
 
 void cleanup_module(void) {
+	rt_disable_irq(hw_irq);
 	rt_release_irq(hw_irq);
-	printk(KERN_INFO "MODULE REMOVED\n");
+	printk("MODULE REMOVED\n");
 	return;
 }
