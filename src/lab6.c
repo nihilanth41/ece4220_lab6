@@ -12,6 +12,14 @@
 #include <rtai.h>
 #include <rtai_sched.h>
 
+/* TODO:
+   Add software handler to change frequency of speaker.
+   Software handler interrupt is triggered by write from user space program.
+   Communicate with user space program through rtfifo i.e. to get the value of the note (@A-@E)
+   Change the frequency accordingly
+*/
+
+
 MODULE_LICENSE("GPL");
 
 #define PORTB_NUM_BUTTONS 6 // 0-5
