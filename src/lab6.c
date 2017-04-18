@@ -9,27 +9,45 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/time.h>
-#include <unistd.h>
 #include <rtai.h>
+#include <rtai_sched.h>
 
 MODULE_LICENSE("GPL");
 
 #define PORTB_NUM_BUTTONS 6 // 0-5
 const int hw_irq = 59;
-//software irq 63
+const int sw_irq = 63;
 
 RTIME period;
+RT_TASK t1;
 volatile unsigned char *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
 volatile unsigned char *PFDR, *PFDDR;
 volatile unsigned char *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
 volatile unsigned char *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
 
-// Hardware interrupt IRQ = 59
-// rt_task <plays speaker>
-// Change period of rt_task to change speaker freq.
+static void play_speaker(void) {
+	// Set PF1 as output
+	*PFDDR |= 0x02;
+	static int pin_val = 0;
+	while(1)
+	{
+		if(1 == pin_val)
+		{
+			*PFDR |= 0x02;
+			pin_val = 0;
+		}
+		else if(0 == pin_val) 
+		{
+			*PFDR &= ~(0x02);
+			pin_val = 1;
+		}
+		rt_task_wait_period();
+	}
+}
 
 // Run when button interrupt triggered
 static void button_handler(unsigned int irq_num, void *cookie) {
+	static RTIME task_period;
 	// Disable interrupts 
 	rt_disable_irq(hw_irq);
 	// Check which button pressed
@@ -38,7 +56,10 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
 		if( (*RawIntStsB & (1 << i)) != 0)
 		{
+
 			printk("Button %d pressed\n", i);
+			task_period = (1+i)*period;
+			rt_task_make_periodic(&t1, 0*period, task_period);
 			break;
 		}
 	// Clear EOI register by *setting* the bit.
@@ -62,8 +83,12 @@ int init_module(void) {
 	IntStsB = (unsigned char *) __ioremap(0x808400BC, 4096, 0);
 	RawIntStsB = (unsigned char *) __ioremap(0x808400C0, 4096, 0);
 	GPIOBDB = (unsigned char *) __ioremap(0x808400C4, 4096, 0);
+	
+	// Enable rt_task to play speaker
 	rt_set_periodic_mode();
 	period = start_rt_timer(nano2count(1000000));
+	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
+	rt_task_make_periodic(&t1, 0*period, 1*period);
 
 	// Set push buttons as inputs
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
@@ -93,6 +118,8 @@ int init_module(void) {
 }
 
 void cleanup_module(void) {
+	rt_task_delete(&t1);
+	stop_rt_timer();
 	rt_disable_irq(hw_irq);
 	rt_release_irq(hw_irq);
 	printk("MODULE REMOVED\n");
