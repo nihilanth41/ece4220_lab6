@@ -14,62 +14,80 @@
 #include <time.h>
 
 #define MSG_SIZE 40
-#define IP_MAX 10
-#define IP_MIN 1
-#define VOTE_TIMEOUT_SEC 5
+#define VOTE_MAX 10
+#define VOTE_MIN 1
 
 // prototypes
 int newMaster(void);
 void getIPAddr(struct sockaddr_in *addr);
-void socket_transciever(int sockfd, struct sockaddr_in *addr, int len);
+void socket_transciever(int sockfd);
 
 // Globals
-int VOTES[IP_MAX + 1] = { 0 };
 int last_octet;
 char ip_str[INET_ADDRSTRLEN];
 char bcast_str[INET_ADDRSTRLEN];
 
-void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
-  char recvbuf[MSG_SIZE];
-  char msgbuf[MSG_SIZE];
-  char tokbuf[MSG_SIZE] = { 0 };
+void socket_transciever(int sockfd) {
+	char recvbuf[MSG_SIZE];
+	char msgbuf[MSG_SIZE];
+	struct sockaddr_in from;
+	socklen_t fromlen = sizeof(from);
+	int n, isMaster = 0, my_vote;
   // Receieve
   while(1)
     {
-      struct sockaddr_in from;
-      socklen_t fromlen = sizeof(from);
-      int n, isMaster = 0;
+
       bzero(&recvbuf, MSG_SIZE);
       bzero(&msgbuf, MSG_SIZE);
 
       // 
-      n = recvfrom(sockfd, recvbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen);
+      n = recvfrom(sockfd, recvbuf, MSG_SIZE, 0, (struct sockaddr *)&from, (socklen_t *)&fromlen);
       if(n < 0) {
 	perror("Error receiving data\n"); }
       else 
       {
-	printf("Received message\n");
-      ('\n' == recvbuf[strlen(recvbuf)-1]) ? memcpy(msgbuf, recvbuf, strlen(recvbuf)-1) : memcpy(msgbuf, recvbuf, strlen(recvbuf));
+	if(recvbuf[strlen(recvbuf)-1] == '\n') {
+		recvbuf[strlen(recvbuf)-1] = '\0';
+	}
+	memcpy(msgbuf, recvbuf, strlen(recvbuf));
+	printf("Received message: %s\n", msgbuf);
+	fflush(stdout);
       
-
       // Check if voting is occuring 
-//      if('#' == msgbuf[0])
-//	{
-//	  tok = strtok(msgbuf, ". ");
-//	  count = 6;
-//	    while(tok != NULL)
-//	      {
-//		count--;
-//		(1 == count
+      if('#' == msgbuf[0])
+      {
+	      int count, vote_val, from_ip;
+	      char *tok = strtok(msgbuf, ". ");
+	      count = 6;
+	      while(tok != NULL)
+	      {
+		      count--;
+		      if(1 == count) {
+			      from_ip = atoi(tok);
+		      }
+		      if(0 == count) {
+			      vote_val = atoi(tok);
+		      }
+	      }
+	      if(vote_val > my_vote) {
+		      isMaster = 0;
+	      }
+	      else if(vote_val == my_vote) {
+		      if(from_ip > last_octet) {
+			      isMaster = 0;
+		      }
+	      }
+      }
 
 	// Check for VOTE
-	if(0 == strcmp(msgbuf, "VOTE") || 0 == strcmp(msgbuf, "vote"))
+	if(0 == strncmp(msgbuf, "VOTE", 4) || 0 == strncmp(msgbuf, "vote", 4))
 	{
+		isMaster = 1;
 		char tmp[MSG_SIZE];
 		char voteBuf[MSG_SIZE] = "# ";
-		int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
+		int r = rand() % (VOTE_MAX + 1 - VOTE_MIN) + VOTE_MIN;
+		my_vote = r;
 		sprintf(tmp, "%d", r);
-		
 		strcat(voteBuf, ip_str);
 		strcat(voteBuf, " ");
 		strcat(voteBuf, tmp);
@@ -80,7 +98,7 @@ void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
 			fprintf(stderr, "sendto() %s\n", strerror(errno));
 		}
 	}
-	else if( (0 == strcmp(msgbuf, "WHOIS") || 0 == strcmp(msgbuf, "whois")) && (1 == isMaster) )
+	else if( (0 == strncmp(msgbuf, "WHOIS", 5) || 0 == strncmp(msgbuf, "whois", 5)) && (1 == isMaster) )
 	{
 		char master_str[MSG_SIZE];
 		sprintf(master_str, "Zach on board %s is the master", ip_str);
@@ -137,7 +155,7 @@ int main(int argc, char **argv) {
     printf("My ip: %s\n", ip_str);
     printf("Broadcast ip: %s\n", bcast_str);
 
-    socket_transciever(sockfd, &server, length);
+    socket_transciever(sockfd);
     
     return 0;
 }
@@ -171,32 +189,4 @@ void getIPAddr(struct sockaddr_in *addr) {
 	}
       tok = strtok(NULL, ". ");
     }
-}
-
-// Tally votes. Return 1 if this program is the new master, 0 otherwise;
-int newMaster(void) {
-  int i = 0;
-  int max_votes = 0;
-  int new_master = 0;
-  for(i=1; i<=IP_MAX; i++)
-    {
-      printf("[%d]: %d\n", i, VOTES[i]);
-      if(VOTES[i] > max_votes)
-	{
-	  new_master = i;
-	  max_votes = VOTES[i];
-	}
-      else if(max_votes == VOTES[i])
-	{
-	  if(i > new_master)
-	    {
-	      new_master = i;
-	    }
-	}
-    }
-  if(new_master == last_octet)
-    {
-      return 1;
-    }
-  return 0;
 }
