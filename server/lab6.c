@@ -38,7 +38,7 @@ void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
     {
       struct sockaddr_in from;
       socklen_t fromlen = sizeof(from);
-      int n;
+      int n, isMaster = 0;
       bzero(&recvbuf, MSG_SIZE);
       bzero(&msgbuf, MSG_SIZE);
 
@@ -61,23 +61,38 @@ void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
 //	      {
 //		count--;
 //		(1 == count
-      printf("Message buffer %s\n", msgbuf);
-      // Check for VOTE
-      if(0 == strcmp(msgbuf, "VOTE") || 0 == strcmp(msgbuf, "vote"))
-      {
-	      char tmp[MSG_SIZE];
-	      char voteBuf[MSG_SIZE] = "# ";
-	      int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
-	      sprintf(tmp, "%d", r);
-	      
-	      strcat(voteBuf, ip_str);
-	      strcat(voteBuf, " ");
-	      strcat(voteBuf, tmp);
-	      printf("Vote buffer: %s\n", voteBuf);
-      }
+
+	// Check for VOTE
+	if(0 == strcmp(msgbuf, "VOTE") || 0 == strcmp(msgbuf, "vote"))
+	{
+		char tmp[MSG_SIZE];
+		char voteBuf[MSG_SIZE] = "# ";
+		int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
+		sprintf(tmp, "%d", r);
+		
+		strcat(voteBuf, ip_str);
+		strcat(voteBuf, " ");
+		strcat(voteBuf, tmp);
+		//printf("Vote buffer: %s\n", voteBuf);
+		// Set broadcast ip
+		from.sin_addr.s_addr = inet_addr(bcast_str);
+		if( sendto(sockfd, voteBuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+			fprintf(stderr, "sendto() %s\n", strerror(errno));
+		}
+	}
+	else if( (0 == strcmp(msgbuf, "WHOIS") || 0 == strcmp(msgbuf, "whois")) && (1 == isMaster) )
+	{
+		char master_str[MSG_SIZE];
+		sprintf(master_str, "Zach on board %s is the master", ip_str);
+		from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
+		if( sendto(sockfd, master_str, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+			fprintf(stderr, "sendto() %s\n", strerror(errno));
+		}
+	}
+
       } //else()
-} // while
-} // func()
+      } // while
+    } // func()
 
 int main(int argc, char **argv) {
     struct sockaddr_in server;
