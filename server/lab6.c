@@ -46,11 +46,13 @@ void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
       n = recvfrom(sockfd, recvbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen);
       if(n < 0) {
 	perror("Error receiving data\n"); }
-      else {
+      else 
+      {
 	printf("Received message\n");
       ('\n' == recvbuf[strlen(recvbuf)-1]) ? memcpy(msgbuf, recvbuf, strlen(recvbuf)-1) : memcpy(msgbuf, recvbuf, strlen(recvbuf));
+      
 
-      // voting is occuring 
+      // Check if voting is occuring 
 //      if('#' == msgbuf[0])
 //	{
 //	  tok = strtok(msgbuf, ". ");
@@ -60,9 +62,22 @@ void socket_transciever(int sockfd, struct sockaddr_in *addr, int len) {
 //		count--;
 //		(1 == count
       printf("Message buffer %s\n", msgbuf);
+      // Check for VOTE
+      if(0 == strcmp(msgbuf, "VOTE") || 0 == strcmp(msgbuf, "vote"))
+      {
+	      char tmp[MSG_SIZE];
+	      char voteBuf[MSG_SIZE] = "# ";
+	      int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
+	      sprintf(tmp, "%d", r);
+	      
+	      strcat(voteBuf, ip_str);
+	      strcat(voteBuf, " ");
+	      strcat(voteBuf, tmp);
+	      printf("Vote buffer: %s\n", voteBuf);
       }
-      }
-}
+      } //else()
+} // while
+} // func()
 
 int main(int argc, char **argv) {
     struct sockaddr_in server;
