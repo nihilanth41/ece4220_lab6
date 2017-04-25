@@ -67,7 +67,7 @@ void socket_transciever(int sockfd) {
           int fd = open("/dev/rtf/1");
           if(fd < 0) {
             fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
-            return -1;
+            return;
           }
           if( write(fd, (void *)&i, sizeof(i)) < 0 ) {
             fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
@@ -85,14 +85,22 @@ void socket_transciever(int sockfd) {
       count = 6;
       while(tok != NULL)
       {
+        printf("%s\n", tok);
         count--;
         if(1 == count) {
           from_ip = atoi(tok);
         }
         if(0 == count) {
           vote_val = atoi(tok);
+          break;
         }
+        tok = strtok(NULL, " .");
       }
+
+      printf("From ip: %d\n", from_ip);
+      printf("Vote val: %d\n", vote_val);
+      printf("My vote: %d\n", my_vote);
+
       if(vote_val > my_vote) {
         isMaster = 0;
       }
@@ -102,6 +110,7 @@ void socket_transciever(int sockfd) {
         }
       }
     }
+
     // Check for VOTE
     else if(0 == strncmp(msgbuf, "VOTE", 4) || 0 == strncmp(msgbuf, "vote", 4))
     {
@@ -122,7 +131,7 @@ void socket_transciever(int sockfd) {
         fprintf(stderr, "sendto() %s\n", strerror(errno));
       }
     }
-    else if( (0 == strncmp(msgbuf, "WHOIS", 5) || 0 == strncmp(msgbuf, "whois", 5)) && (1 == isMaster) )
+    else if( (0 == strncmp(msgbuf, "WHOIS", 5) || 0 == strncmp(msgbuf, "whois", 5)) & (1 == isMaster) )
     {
       char master_str[MSG_SIZE];
       sprintf(master_str, "Zach on board %s is the master", ip_str);
