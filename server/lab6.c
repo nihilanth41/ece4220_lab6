@@ -13,6 +13,9 @@
 #include <errno.h>
 #include <time.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 #define MSG_SIZE 40
 #define VOTE_MAX 10
@@ -27,6 +30,7 @@ void socket_transciever(int sockfd);
 int last_octet;
 char ip_str[INET_ADDRSTRLEN];
 char bcast_str[INET_ADDRSTRLEN];
+volatile unsigned char *VIC2SoftInt = NULL;
 
 void socket_transciever(int sockfd) {
   char recvbuf[MSG_SIZE];
@@ -64,7 +68,7 @@ void socket_transciever(int sockfd) {
       {
         if(notes[i] == c) {
           // Write i to fifo
-          int fd = open("/dev/rtf/1");
+          int fd = open("/dev/rtf/1", O_WRONLY);
           if(fd < 0) {
             fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
             return;
@@ -73,7 +77,8 @@ void socket_transciever(int sockfd) {
             fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
           }
           // Set software interrupt
-
+          *VIC2SoftInt |= 0x80; // Set MSB
+          break;
         }
       }
     }
@@ -190,7 +195,15 @@ int main(int argc, char **argv) {
     fprintf(stderr, "setsockopt() %s\n", strerror(errno));
   }
 
-
+  int fd = open("/dev/mem", O_RDWR|O_SYNC);
+  if(fd < 0) {
+    printf("Error opening /dev/mem. Are you root?\n");
+    return(-1); // failed open
+  }
+  VIC2SoftInt = (unsigned char *) mmap(NULL, 4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0x800C0018);
+  if(MAP_FAILED == VIC2SoftInt) { 
+    printf("Unable to map memory space\n");
+  }
 
   socket_transciever(sockfd);
 
