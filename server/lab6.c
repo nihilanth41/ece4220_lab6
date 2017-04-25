@@ -97,9 +97,9 @@ void socket_transciever(int sockfd) {
         tok = strtok(NULL, " .");
       }
 
-      printf("From ip: %d\n", from_ip);
-      printf("Vote val: %d\n", vote_val);
-      printf("My vote: %d\n", my_vote);
+      //printf("From ip: %d\n", from_ip);
+      //printf("Vote val: %d\n", vote_val);
+      //printf("My vote: %d\n", my_vote);
 
       if(vote_val > my_vote) {
         isMaster = 0;
@@ -161,6 +161,8 @@ int main(int argc, char **argv) {
   if(argc >= 3) {
     portnum = atoi(argv[2]);
   }
+
+  printf("Portnum: %d\n", portnum);
   hp = gethostbyname(argv[1]);
 
   srand(time(NULL)); // Random numbers seed
@@ -175,6 +177,10 @@ int main(int argc, char **argv) {
   server.sin_family = AF_INET;
   server.sin_port = htons(portnum);
   bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
+  getIPAddr(&server);
+  printf("My ip: %s\n", ip_str);
+  printf("Broadcast ip: %s\n", bcast_str);
+  server.sin_addr.s_addr = INADDR_ANY;
 
   if( bind(sockfd, (struct sockaddr *)&server, length) < 0 ) {
     fprintf(stderr, "bind() %s\n", strerror(errno));
@@ -184,9 +190,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "setsockopt() %s\n", strerror(errno));
   }
 
-  getIPAddr(&server);
-  printf("My ip: %s\n", ip_str);
-  printf("Broadcast ip: %s\n", bcast_str);
+
 
   socket_transciever(sockfd);
 
