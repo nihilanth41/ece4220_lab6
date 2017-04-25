@@ -12,6 +12,7 @@
 #include <strings.h>
 #include <errno.h>
 #include <time.h>
+#include <ctype.h>
 
 #define MSG_SIZE 40
 #define VOTE_MAX 10
@@ -52,8 +53,32 @@ void socket_transciever(int sockfd) {
     printf("Received message: %s\n", msgbuf);
     fflush(stdout);
 
+    // Check for @<note> 
+    if('@' == msgbuf[0])
+    {
+      const char notes[] = "ABCDE";
+      char c = msgbuf[2];
+      c = toupper(c);
+      int i;
+      for(i=0; i<5; i++)
+      {
+        if(notes[i] == c) {
+          // Write i to fifo
+          int fd = open("/dev/rtf/1");
+          if(fd < 0) {
+            fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
+            return -1;
+          }
+          if( write(fd, (void *)&i, sizeof(i)) < 0 ) {
+            fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
+          }
+          // Set software interrupt
+
+        }
+      }
+    }
     // Check if voting is occuring 
-    if('#' == msgbuf[0])
+    else if('#' == msgbuf[0])
     {
       int count, vote_val, from_ip;
       char *tok = strtok(msgbuf, ". ");
@@ -77,9 +102,8 @@ void socket_transciever(int sockfd) {
         }
       }
     }
-
     // Check for VOTE
-    if(0 == strncmp(msgbuf, "VOTE", 4) || 0 == strncmp(msgbuf, "vote", 4))
+    else if(0 == strncmp(msgbuf, "VOTE", 4) || 0 == strncmp(msgbuf, "vote", 4))
     {
       isMaster = 1;
       char tmp[MSG_SIZE];
