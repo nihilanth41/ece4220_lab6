@@ -12,6 +12,8 @@
 #include <rtai.h>
 #include <rtai_sched.h>
 
+#define FIFO_ID 1 ///dev/rtf/1
+
 /* TODO:
    Add software handler to change frequency of speaker.
    Software handler interrupt is triggered by write from user space program.
@@ -32,6 +34,26 @@ volatile unsigned char *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
 volatile unsigned char *PFDR, *PFDDR;
 volatile unsigned char *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
 volatile unsigned char *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
+volatile unsigned char *VIC2IntEnable, *VIC2SoftInt, *VIC2SoftIntClear;
+
+static void read_fifo(unsigned int irq_num, void *cookie) {
+	// Disable interrupt
+	rt_disable_irq(sw_irq);
+
+	// Clear interrupt
+	*VIC2SoftIntClear |= 0x80; // Set MSB to clear interrupt
+	RTIME task_period;
+	int i=0;
+	int ret = rtf_get(FIFO_ID, &i, sizeof(i));
+	if(ret < 0) {
+		printk("Error reading from FIFO\n");
+	}
+	task_period = (1+i)*period;
+	rt_task_make_periodic(&t1, 0*period, task_period);
+
+	rt_enable_irq(sw_irq);
+}
+
 
 static void play_speaker(void) {
 	// Set PF1 as output
@@ -91,6 +113,10 @@ int init_module(void) {
 	IntStsB = (unsigned char *) __ioremap(0x808400BC, 4096, 0);
 	RawIntStsB = (unsigned char *) __ioremap(0x808400C0, 4096, 0);
 	GPIOBDB = (unsigned char *) __ioremap(0x808400C4, 4096, 0);
+	VIC2IntEnable = (unsigned char *) __ioremap(0x800C0010, 4096, 0);
+	VIC2SoftInt = (unsigned char *) __ioremap(0x800C0018, 4096, 0);
+	VIC2SoftIntClear = (unsigned char *) __ioremap(0x800C001C, 4096, 0);
+
 	
 	// Enable rt_task to play speaker
 	rt_set_periodic_mode();
@@ -110,16 +136,31 @@ int init_module(void) {
 	*GPIOBDB |= (0x1F);	// Enable debounce
 	*GPIOBEOI |= 0xFF;	// Set all the bits to clear all the interrupts
 	*GPIOBIntEn |= (0x1F); // Enable interrupt on B0-B4
-	
+
 	// Attempt to attach handler
 	if(rt_request_irq(hw_irq, button_handler, NULL, 1) < 0)
 	{
 		printk("Unable to request IRQ\n");
 		return -1;
 	}
-	
 	// Enable interrupt
 	rt_enable_irq(hw_irq);
+
+	*VIC2IntEnable |= 0x80; // msb 1 set, msb 1 clear
+	if(rtf_create(FIFO_ID, sizeof(int)) < 0) {
+		printk("Unable to create fifo\n");
+		return -1;
+	}
+	//*VIC2SoftInt // userspace 
+	//*VIC2SoftIntClear  
+
+	if(rt_request_irq(sw_irq, read_fifo, NULL, 1) < 0)
+	{
+		printk("Unable to request SW IRQ\n");
+		return -1;
+	}
+
+	rt_enable_irq(sw_irq);
 
 	printk("MODULE INSTALLED\n");
 	return 0;
@@ -130,6 +171,8 @@ void cleanup_module(void) {
 	stop_rt_timer();
 	rt_disable_irq(hw_irq);
 	rt_release_irq(hw_irq);
+	rt_disable_irq(sw_irq);
+	rt_release_irq(sw_irq);
 	printk("MODULE REMOVED\n");
 	return;
 }
