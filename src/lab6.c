@@ -116,11 +116,7 @@ int init_module(void) {
 	VIC2IntEnable = (unsigned long *)((char *)BasePtrB + 0x10);
 	VIC2SoftIntClear = (unsigned long *)((char *)BasePtrB + 0x1C);
 	
-	// Enable rt_task to play speaker
-	rt_set_periodic_mode();
-	period = start_rt_timer(nano2count(1000000));
-	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
-	rt_task_make_periodic(&t1, 0*period, period);
+
 
 	// Set push buttons as inputs
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
@@ -148,6 +144,16 @@ int init_module(void) {
 		printk("Unable to request SW IRQ\n");
 		return -1;
 	}
+	
+	// Enable interrupt
+	rt_enable_irq(hw_irq);
+	rt_enable_irq(sw_irq);
+	
+	// Enable rt_task to play speaker
+	rt_set_periodic_mode();
+	period = start_rt_timer(nano2count(1000000));
+	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
+	rt_task_make_periodic(&t1, 0*period, period);
 
 	if(rtf_create(FIFO_READ, sizeof(int)) < 0) {
 		printk("Unable to create fifo\n");
@@ -158,10 +164,6 @@ int init_module(void) {
 		return -1;
 	}
 	
-	// Enable interrupt
-	rt_enable_irq(hw_irq);
-	rt_enable_irq(sw_irq);
-
 	printk("MODULE INSTALLED\n");
 	return 0;
 }

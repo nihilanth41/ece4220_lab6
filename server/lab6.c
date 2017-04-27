@@ -78,7 +78,7 @@ void socket_transciever(int sockfd) {
             fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
           }
           // Set software interrupt
-          *VIC2SoftInt |= 0x80; // Set MSB
+          *VIC2SoftInt |= 1 << 31; // Set MSB
           if(1 == isMaster) { 
             // Broadcast note to slaves if master
             printf("Forwarding message: %s\n", msgbuf);
