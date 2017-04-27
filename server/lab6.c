@@ -31,7 +31,7 @@ void socket_transciever(int sockfd);
 int last_octet;
 char ip_str[INET_ADDRSTRLEN];
 char bcast_str[INET_ADDRSTRLEN];
-volatile unsigned char *VIC2SoftInt = NULL;
+unsigned long *VIC2SoftInt = NULL; 
 
 void socket_transciever(int sockfd) {
   char recvbuf[MSG_SIZE];
@@ -205,15 +205,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "setsockopt() %s\n", strerror(errno));
   }
 
-  int fd = open("/dev/mem", O_RDWR|O_SYNC);
+  int fd = open("/dev/mem", O_RDWR|O_SYNC, 0);
   if(fd < 0) {
     printf("Error opening /dev/mem. Are you root?\n");
-    return(-1); // failed open
+    return -1; // failed open
   }
-  VIC2SoftInt = (unsigned char *) mmap(NULL, 4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0x800C0018);
-  if(MAP_FAILED == VIC2SoftInt) { 
-    printf("Unable to map memory space\n");
+  unsigned long *BasePtr = mmap(NULL, getpagesize(), PROT_READ|PROT_WRITE,MAP_SHARED,fd,0x800C0000);
+  if(MAP_FAILED == BasePtr) { 
+    printf("Unable to map baseptr\n");
+    return -1;
   }
+  VIC2SoftInt = (unsigned long *)((char *)BasePtr + 0x18);
 
   socket_transciever(sockfd);
 
