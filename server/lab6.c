@@ -109,7 +109,7 @@ void socket_transciever(int sockfd) {
       count = 6;
       while(tok != NULL)
       {
-        printf("%s\n", tok);
+        //printf("%s\n", tok);
         count--;
         if(1 == count) {
           from_ip = atoi(tok);
