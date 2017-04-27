@@ -12,18 +12,10 @@
 #include <rtai.h>
 #include <rtai_sched.h>
 
-#define FIFO_ID 1 ///dev/rtf/1
-
-/* TODO:
-   Add software handler to change frequency of speaker.
-   Software handler interrupt is triggered by write from user space program.
-   Communicate with user space program through rtfifo i.e. to get the value of the note (@A-@E)
-   Change the frequency accordingly
-*/
-
-
 MODULE_LICENSE("GPL");
 
+#define FIFO_READ 0 // /dev/rtf/0
+#define FIFO_WRITE 1 ///dev/rtf/1
 #define PORTB_NUM_BUTTONS 6 // 0-5
 const int hw_irq = 59;
 const int sw_irq = 63;
@@ -34,24 +26,23 @@ volatile unsigned char *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
 volatile unsigned char *PFDR, *PFDDR;
 volatile unsigned char *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
 volatile unsigned char *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
-volatile unsigned char *VIC2IntEnable, *VIC2SoftInt, *VIC2SoftIntClear;
+volatile unsigned long *VIC2IntEnable, *VIC2SoftIntClear;
 
 static void read_fifo(unsigned int irq_num, void *cookie) {
 	// Disable interrupt
-	rt_disable_irq(sw_irq);
-
+	rt_disable_irq(irq_num);
+	printk("Software handler activated\n");
 	// Clear interrupt
-	*VIC2SoftIntClear |= 0x80; // Set MSB to clear interrupt
-	RTIME task_period;
+	RTIME task_period = period;
 	int i=0;
-	int ret = rtf_get(FIFO_ID, &i, sizeof(i));
+	int ret = rtf_get(FIFO_READ, &i, sizeof(i));
 	if(ret < 0) {
 		printk("Error reading from FIFO\n");
 	}
 	task_period = (1+i)*period;
-	rt_task_make_periodic(&t1, 0*period, task_period);
-
-	rt_enable_irq(sw_irq);
+	rt_task_make_periodic(&t1, rt_get_time(), task_period);
+	*VIC2SoftIntClear |= 1 << 31; // Clear interrupt by setting the MSB
+	rt_enable_irq(irq_num);
 }
 
 
@@ -79,7 +70,7 @@ static void play_speaker(void) {
 static void button_handler(unsigned int irq_num, void *cookie) {
 	static RTIME task_period;
 	// Disable interrupts 
-	rt_disable_irq(hw_irq);
+	rt_disable_irq(irq_num);
 	// Check which button pressed
 	// If RawIntSts == 1 then that button was pressed
 	int i=0;
@@ -95,7 +86,7 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 	// Clear EOI register by *setting* the bit.
 	*GPIOBEOI |= (0x1F);
 	// Re-enable interrupts
-	rt_enable_irq(hw_irq);
+	rt_enable_irq(irq_num);
 }
 
 int init_module(void) {
@@ -113,16 +104,16 @@ int init_module(void) {
 	IntStsB = (unsigned char *) __ioremap(0x808400BC, 4096, 0);
 	RawIntStsB = (unsigned char *) __ioremap(0x808400C0, 4096, 0);
 	GPIOBDB = (unsigned char *) __ioremap(0x808400C4, 4096, 0);
-	VIC2IntEnable = (unsigned char *) __ioremap(0x800C0010, 4096, 0);
-	VIC2SoftInt = (unsigned char *) __ioremap(0x800C0018, 4096, 0);
-	VIC2SoftIntClear = (unsigned char *) __ioremap(0x800C001C, 4096, 0);
-
+	// SW Int
+	unsigned long *BasePtrB = (unsigned long *) __ioremap(0x800C0000, 4096, 0);
+	VIC2IntEnable = (unsigned long *)((char *)BasePtrB + 0x10);
+	VIC2SoftIntClear = (unsigned long *)((char *)BasePtrB + 0x1C);
 	
 	// Enable rt_task to play speaker
 	rt_set_periodic_mode();
 	period = start_rt_timer(nano2count(1000000));
 	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
-	rt_task_make_periodic(&t1, 0*period, 1*period);
+	rt_task_make_periodic(&t1, 0*period, period);
 
 	// Set push buttons as inputs
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
@@ -136,6 +127,8 @@ int init_module(void) {
 	*GPIOBDB |= (0x1F);	// Enable debounce
 	*GPIOBEOI |= 0xFF;	// Set all the bits to clear all the interrupts
 	*GPIOBIntEn |= (0x1F); // Enable interrupt on B0-B4
+	// Enable SW interrupt IRQ 63
+	*VIC2IntEnable |= 1 << 31;
 
 	// Attempt to attach handler
 	if(rt_request_irq(hw_irq, button_handler, NULL, 1) < 0)
@@ -143,36 +136,34 @@ int init_module(void) {
 		printk("Unable to request IRQ\n");
 		return -1;
 	}
-	// Enable interrupt
-	rt_enable_irq(hw_irq);
-
-	*VIC2IntEnable |= 0x80; // msb 1 set, msb 1 clear
-	if(rtf_create(FIFO_ID, sizeof(int)) < 0) {
-		printk("Unable to create fifo\n");
-		return -1;
-	}
-	//*VIC2SoftInt // userspace 
-	//*VIC2SoftIntClear  
-
 	if(rt_request_irq(sw_irq, read_fifo, NULL, 1) < 0)
 	{
 		printk("Unable to request SW IRQ\n");
 		return -1;
 	}
-
+	// Enable interrupt
+	rt_enable_irq(hw_irq);
 	rt_enable_irq(sw_irq);
+
+	if(rtf_create(FIFO_READ, sizeof(int)) < 0) {
+		printk("Unable to create fifo\n");
+		return -1;
+	}
+	if(rtf_create(FIFO_WRITE, sizeof(int)) < 0) {
+		printk("Unable to create fifo\n");
+		return -1;
+	}
 
 	printk("MODULE INSTALLED\n");
 	return 0;
 }
 
 void cleanup_module(void) {
+	rt_release_irq(hw_irq);
+	rt_release_irq(sw_irq);
+	rtf_destroy(FIFO_READ);
+	rtf_destroy(FIFO_WRITE);
 	rt_task_delete(&t1);
 	stop_rt_timer();
-	rt_disable_irq(hw_irq);
-	rt_release_irq(hw_irq);
-	rt_disable_irq(sw_irq);
-	rt_release_irq(sw_irq);
 	printk("MODULE REMOVED\n");
-	return;
 }
