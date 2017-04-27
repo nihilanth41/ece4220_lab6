@@ -34,6 +34,7 @@ char bcast_str[INET_ADDRSTRLEN];
 unsigned long *VIC2SoftInt = NULL; 
 
 void socket_transciever(int sockfd) {
+  int forwarded = 0;
   char recvbuf[MSG_SIZE];
   char msgbuf[MSG_SIZE];
   struct sockaddr_in from;
@@ -61,33 +62,41 @@ void socket_transciever(int sockfd) {
     // Check for @<note> 
     if('@' == msgbuf[0])
     {
-      const char notes[] = "ABCDE";
-      char c = msgbuf[1];
-      c = toupper(c);
-      int i;
-      for(i=0; i<5; i++)
-      {
-        if(notes[i] == c) { // Message received
-          // Write i to fifo -- change frequency
-          int fd = open("/dev/rtf/0", O_WRONLY); // FIFO_WRITE
-          if(fd < 0) {
-            fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
-            return;
-          }
-          if( write(fd, (void *)&i, sizeof(i)) < 0 ) {
-            fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
-          }
-          // Set software interrupt
-          *VIC2SoftInt |= 1 << 31; // Set MSB
-          if(1 == isMaster) { 
-            // Broadcast note to slaves if master
-            printf("Forwarding message: %s\n", msgbuf);
-            from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
-            if( sendto(sockfd, msgbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
-              fprintf(stderr, "sendto() %s\n", strerror(errno));
+      if(1 == forwarded) {
+        // check to see if we are receiving our own broadcast
+        forwarded = 0;
+        // ignore it and reset the state
+      }
+      else {
+        const char notes[] = "ABCDE";
+        char c = msgbuf[1];
+        c = toupper(c);
+        int i;
+        for(i=0; i<5; i++)
+        {
+          if(notes[i] == c) { // Message received
+            // Write i to fifo -- change frequency
+            int fd = open("/dev/rtf/0", O_WRONLY); // FIFO_WRITE
+            if(fd < 0) {
+              fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
+              return;
             }
+            if( write(fd, (void *)&i, sizeof(i)) < 0 ) {
+              fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
+            }
+            // Set software interrupt
+            *VIC2SoftInt |= 1 << 31; // Set MSB
+            if(1 == isMaster) { 
+              // Broadcast note to slaves if master
+              printf("Forwarding message: %s\n", msgbuf);
+              forwarded = 1;
+              from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
+              if( sendto(sockfd, msgbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+                fprintf(stderr, "sendto() %s\n", strerror(errno));
+              }
+            }
+            break;
           }
-          break;
         }
       }
     }
