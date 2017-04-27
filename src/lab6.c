@@ -11,6 +11,7 @@
 #include <linux/time.h>
 #include <rtai.h>
 #include <rtai_sched.h>
+#include <rtai_fifos.h>
 
 MODULE_LICENSE("GPL");
 
@@ -75,6 +76,7 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 	// If RawIntSts == 1 then that button was pressed
 	int i=0;
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
+	{
 		if( (*RawIntStsB & (1 << i)) != 0)
 		{
 
@@ -83,6 +85,7 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 			rt_task_make_periodic(&t1, 0*period, task_period);
 			break;
 		}
+	}
 	// Clear EOI register by *setting* the bit.
 	*GPIOBEOI |= (0x1F);
 	// Re-enable interrupts
@@ -159,7 +162,9 @@ int init_module(void) {
 }
 
 void cleanup_module(void) {
+	rt_disable_irq(hw_irq);
 	rt_release_irq(hw_irq);
+	rt_disable_irq(sw_irq);
 	rt_release_irq(sw_irq);
 	rtf_destroy(FIFO_READ);
 	rtf_destroy(FIFO_WRITE);
