@@ -126,7 +126,8 @@ int init_module(void) {
 	
 	*GPIOBIntEn &= 0x00; // Disable all interrupts on PORTB
 	*GPIOBIntType1 |= (0x1F); // Set interrupts to edge sensitive 
-	*GPIOBIntType2 |= (0x1F); // Set interrupts to rising edge 
+	//*GPIOBIntType2 |= (0x1F); // Set interrupts to rising edge 
+	*GPIOBIntType2 &= ~(0x1F); // Falling edge ***
 	*GPIOBDB |= (0x1F);	// Enable debounce
 	*GPIOBEOI |= 0xFF;	// Set all the bits to clear all the interrupts
 	*GPIOBIntEn |= (0x1F); // Enable interrupt on B0-B4
