@@ -40,8 +40,11 @@ static void read_fifo(unsigned int irq_num, void *cookie) {
 	if(ret < 0) {
 		printk("Error reading from FIFO\n");
 	}
-	task_period = (1+i)*period;
-	rt_task_make_periodic(&t1, rt_get_time(), task_period);
+	else {
+		task_period = (1+i)*period;
+		rt_task_make_periodic(&t1, rt_get_time(), task_period);
+	}
+
 	*VIC2SoftIntClear |= 1 << 31; // Clear interrupt by setting the MSB
 	rt_enable_irq(irq_num);
 }
@@ -77,11 +80,12 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 	int i=0;
 	for(i=0; i<PORTB_NUM_BUTTONS; i++)
 	{
-		if( (*RawIntStsB & (1 << i)) != 0)
+		if( (*RawIntStsB & (1 << i)) )
 		{
 
 			printk("Button %d pressed\n", i);
 			task_period = (1+i)*period;
+			rtf_put(FIFO_WRITE, &i, sizeof(i)); // Write 'note' to FIFO 
 			rt_task_make_periodic(&t1, 0*period, task_period);
 			break;
 		}
@@ -144,9 +148,6 @@ int init_module(void) {
 		printk("Unable to request SW IRQ\n");
 		return -1;
 	}
-	// Enable interrupt
-	rt_enable_irq(hw_irq);
-	rt_enable_irq(sw_irq);
 
 	if(rtf_create(FIFO_READ, sizeof(int)) < 0) {
 		printk("Unable to create fifo\n");
@@ -156,6 +157,10 @@ int init_module(void) {
 		printk("Unable to create fifo\n");
 		return -1;
 	}
+	
+	// Enable interrupt
+	rt_enable_irq(hw_irq);
+	rt_enable_irq(sw_irq);
 
 	printk("MODULE INSTALLED\n");
 	return 0;

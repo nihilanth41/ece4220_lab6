@@ -20,9 +20,10 @@
 #define MSG_SIZE 40
 #define VOTE_MAX 10
 #define VOTE_MIN 1
+#define FIFO_READ 1 // Opposite of kernel module
+#define FIFO_WRITE 0
 
 // prototypes
-int newMaster(void);
 void getIPAddr(struct sockaddr_in *addr);
 void socket_transciever(int sockfd);
 
@@ -61,14 +62,14 @@ void socket_transciever(int sockfd) {
     if('@' == msgbuf[0])
     {
       const char notes[] = "ABCDE";
-      char c = msgbuf[2];
+      char c = msgbuf[1];
       c = toupper(c);
       int i;
       for(i=0; i<5; i++)
       {
-        if(notes[i] == c) {
-          // Write i to fifo
-          int fd = open("/dev/rtf/1", O_WRONLY);
+        if(notes[i] == c) { // Message received
+          // Write i to fifo -- change frequency
+          int fd = open("/dev/rtf/0", O_WRONLY); // FIFO_WRITE
           if(fd < 0) {
             fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
             return;
@@ -78,10 +79,19 @@ void socket_transciever(int sockfd) {
           }
           // Set software interrupt
           *VIC2SoftInt |= 0x80; // Set MSB
+          if(1 == isMaster) { 
+            // Broadcast note to slaves if master
+            printf("Forwarding message: %s\n", msgbuf);
+            from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
+            if( sendto(sockfd, msgbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+              fprintf(stderr, "sendto() %s\n", strerror(errno));
+            }
+          }
           break;
         }
       }
     }
+
     // Check if voting is occuring 
     else if('#' == msgbuf[0])
     {
