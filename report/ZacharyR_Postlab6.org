@@ -39,21 +39,225 @@ Figure 1. Flowchart for the kernel module.
 Figure 2. Flowchart for the userspace program.
 
 ** Experiments and Results
-Didn't actually get the demo working in class, but I did manage to test parts of
-the functionality with other servers.  Mostly tested it by using the loopback
-address (127.0.0.1) as the broadcast and running one of the example programs to
-send messages. Using this method I was at least able to get the server to respond to a
-WHOIS, and VOTE.
+The work was divided into the kernel module portion, and the userspace
+program. The userspace program was then divided into the Lab 5 functionality
+(since I didn't get that to work by the deadline) and the functionality for
+Lab 6. The main way I tested the network socket portion was by using the
+Lab6_client program specified in the lab document, and just trying all the
+different cases. E.g. WHOIS when slave should give no response, tested VOTE and
+if the server recognized itself as the new master.In lieu of that I used the
+netcat (nc) command from another host to send commands to the server. In cases
+where I didn't have a program to display the replies from the server, I relied
+on print statements to stdout to help me debug. The kernel module portion I
+tested just by loading it and trying all the buttons, making sure that the tone
+changed each time.  I also relied on printk statements (read using dmesg) to
+help debug the kernel module.
 ** Discussion
-The most painful part of this lab was dealing with the conversion between the
-sockaddr integer value and the string ip address. I.e. string parsing. Also the
-logic to keep track of the votes.  Main thing I learned was just about the
-socket functions and data structs in general.  Not very fun to use initially,
-but now that I have a cursory familiarity it should be easier to learn more
-about them.
-*** Post Lab Questions
+The first part of the lab with the hardware interrupt was pretty easy to get
+working. I spent most of the time trying to get the master/slave functionality
+from lab 5 working. In implementing that, I realized that I misunderstood some
+of the requirements of lab 5. For example, I was initially trying to tally all
+the votes and use the winning (largest number of) vote as the last octet of the
+new master's IP address. Another issue I ran into was in binding the socket
+(bind()), I initially didn't use the INADDR_ANY address because it messed up my
+string parsing for actual ip address. I.e. INADDR_ANY binds to 0.0.0.0 and
+0.0.0.255. The TA helped me determine that this was a necessary step to receive
+the broadcasts. Ended up fixing this by parsing the IP string *before* doing the
+bind with INADDR_ANY.
+
+Part 2 of the lab with the software irq was straightforward (at least in
+concept) but this ended up being difficult to debug. Tracking down segfaults in
+the kernel module was a pain, and a lot of times I had to reboot the board,
+re-acquire it, etc. If I was going to redesign this, I would maybe avoid using
+the kernel module and just do as much as possible in userspace instead. Or,
+maybe just use the kernel module for reading from the FIFO and toggling the
+speaker pin.
 ** Code  
-#+NAME: lab5.c
+#+NAME: lab6.c (kernel module)
+#+ATTR_LATEX: :foat nil
+#+BEGIN_SRC C
+#ifndef MODULE 
+#define MODULE
+#endif
+
+#ifndef __KERNEL__
+#define __KERNEL__
+#endif
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/time.h>
+#include <rtai.h>
+#include <rtai_sched.h>
+#include <rtai_fifos.h>
+
+MODULE_LICENSE("GPL");
+
+#define FIFO_READ 0 // /dev/rtf/0
+#define FIFO_WRITE 1 ///dev/rtf/1
+#define PORTB_NUM_BUTTONS 6 // 0-5
+const int hw_irq = 59;
+const int sw_irq = 63;
+
+RTIME period;
+RT_TASK t1;
+volatile unsigned char *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
+volatile unsigned char *PFDR, *PFDDR;
+volatile unsigned char *GPIOBIntEn, *GPIOBIntType1, *GPIOBIntType2;
+volatile unsigned char *GPIOBEOI, *GPIOBDB, *IntStsB, *RawIntStsB;
+volatile unsigned long *VIC2IntEnable, *VIC2SoftIntClear;
+
+static void read_fifo(unsigned int irq_num, void *cookie) {
+	// Disable interrupt
+	rt_disable_irq(irq_num);
+	printk("Software handler activated\n");
+	// Clear interrupt
+	RTIME task_period = period;
+	int i=0;
+	int ret = rtf_get(FIFO_READ, &i, sizeof(i));
+	if(ret < 0) {
+		printk("Error reading from FIFO\n");
+	}
+	else {
+		task_period = (1+i)*period;
+		rt_task_make_periodic(&t1, rt_get_time(), task_period);
+	}
+
+	*VIC2SoftIntClear |= 1 << 31; // Clear interrupt by setting the MSB
+	rt_enable_irq(irq_num);
+}
+
+
+static void play_speaker(void) {
+	// Set PF1 as output
+	*PFDDR |= 0x02;
+	static int pin_val = 0;
+	while(1)
+	{
+		if(1 == pin_val)
+		{
+			*PFDR |= 0x02;
+			pin_val = 0;
+		}
+		else if(0 == pin_val) 
+		{
+			*PFDR &= ~(0x02);
+			pin_val = 1;
+		}
+		rt_task_wait_period();
+	}
+}
+
+// Run when button interrupt triggered
+static void button_handler(unsigned int irq_num, void *cookie) {
+	static RTIME task_period;
+	// Disable interrupts 
+	rt_disable_irq(irq_num);
+	// Check which button pressed
+	// If RawIntSts == 1 then that button was pressed
+	int i=0;
+	for(i=0; i<PORTB_NUM_BUTTONS; i++)
+	{
+		if( (*RawIntStsB & (1 << i)) )
+		{
+
+			printk("Button %d pressed\n", i);
+			task_period = (1+i)*period;
+			rtf_put(FIFO_WRITE, &i, sizeof(i)); // Write 'note' to FIFO 
+			rt_task_make_periodic(&t1, 0*period, task_period);
+			break;
+		}
+	}
+	// Clear EOI register by *setting* the bit.
+	*GPIOBEOI |= (0x1F);
+	// Re-enable interrupts
+	rt_enable_irq(irq_num);
+}
+
+int init_module(void) {
+	int i=0;
+	// Attempt to map file descriptor
+	BasePtr = (unsigned char *) __ioremap(0x80840000, 4096, 0);
+	PBDR = (unsigned char *) __ioremap(0x80840004, 4096, 0);
+	PBDDR = (unsigned char *) __ioremap(0x80840014, 4096, 0);
+	PFDR  = (unsigned char *) __ioremap(0x80840030, 4096, 0);
+	PFDDR = (unsigned char *) __ioremap(0x80840034, 4096, 0);
+	GPIOBIntType1 = (unsigned char *) __ioremap(0x808400AC, 4096, 0);
+	GPIOBIntType2 = (unsigned char *) __ioremap(0x808400B0, 4096, 0);
+	GPIOBEOI = (unsigned char *) __ioremap(0x808400B4, 4096, 0); 
+	GPIOBIntEn = (unsigned char *) __ioremap(0x808400B8, 4096, 0);
+	IntStsB = (unsigned char *) __ioremap(0x808400BC, 4096, 0);
+	RawIntStsB = (unsigned char *) __ioremap(0x808400C0, 4096, 0);
+	GPIOBDB = (unsigned char *) __ioremap(0x808400C4, 4096, 0);
+	// SW Int
+	unsigned long *BasePtrB = (unsigned long *) __ioremap(0x800C0000, 4096, 0);
+	VIC2IntEnable = (unsigned long *)((char *)BasePtrB + 0x10);
+	VIC2SoftIntClear = (unsigned long *)((char *)BasePtrB + 0x1C);
+	
+	// Enable rt_task to play speaker
+	rt_set_periodic_mode();
+	period = start_rt_timer(nano2count(1000000));
+	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
+	rt_task_make_periodic(&t1, 0*period, period);
+
+	// Set push buttons as inputs
+	for(i=0; i<PORTB_NUM_BUTTONS; i++)
+	{
+		*PBDDR &= ~(1 << i);
+	}
+	
+	*GPIOBIntEn &= 0x00; // Disable all interrupts on PORTB
+	*GPIOBIntType1 |= (0x1F); // Set interrupts to edge sensitive 
+	*GPIOBIntType2 |= (0x1F); // Set interrupts to rising edge 
+	*GPIOBDB |= (0x1F);	// Enable debounce
+	*GPIOBEOI |= 0xFF;	// Set all the bits to clear all the interrupts
+	*GPIOBIntEn |= (0x1F); // Enable interrupt on B0-B4
+	// Enable SW interrupt IRQ 63
+	*VIC2IntEnable |= 1 << 31;
+
+	// Attempt to attach handler
+	if(rt_request_irq(hw_irq, button_handler, NULL, 1) < 0)
+	{
+		printk("Unable to request IRQ\n");
+		return -1;
+	}
+	if(rt_request_irq(sw_irq, read_fifo, NULL, 1) < 0)
+	{
+		printk("Unable to request SW IRQ\n");
+		return -1;
+	}
+
+	if(rtf_create(FIFO_READ, sizeof(int)) < 0) {
+		printk("Unable to create fifo\n");
+		return -1;
+	}
+	if(rtf_create(FIFO_WRITE, sizeof(int)) < 0) {
+		printk("Unable to create fifo\n");
+		return -1;
+	}
+	
+	// Enable interrupt
+	rt_enable_irq(hw_irq);
+	rt_enable_irq(sw_irq);
+
+	printk("MODULE INSTALLED\n");
+	return 0;
+}
+
+void cleanup_module(void) {
+	rt_disable_irq(hw_irq);
+	rt_release_irq(hw_irq);
+	rt_disable_irq(sw_irq);
+	rt_release_irq(sw_irq);
+	rtf_destroy(FIFO_READ);
+	rtf_destroy(FIFO_WRITE);
+	rt_task_delete(&t1);
+	stop_rt_timer();
+	printk("MODULE REMOVED\n");
+}
+#+END_SRC
+
+#+NAME: lab6.c (userspace program)
 #+ATTR_LATEX: :foat nil
 #+BEGIN_SRC C
 #include <stdio.h>
@@ -61,236 +265,253 @@ about them.
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
+#include <net/if.h>
 #include <arpa/inet.h>
-#include <netdb.h> // gethostbyname
+#include <netdb.h> 
 #include <string.h>
-#include <strings.h> // bcopy
+#include <strings.h>
 #include <errno.h>
 #include <time.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 #define MSG_SIZE 40
-#define IP_MAX 10
-#define IP_MIN 1
-#define VOTE_TIMEOUT_SEC 5
-//#define BROADCAST_ADDR 10.3.52.255
-#define BROADCAST_ADDR 127.0.0.1
+#define VOTE_MAX 10
+#define VOTE_MIN 1
+#define FIFO_READ 1 // Opposite of kernel module
+#define FIFO_WRITE 0
 
-int VOTES[IP_MAX + 1] = { 0 };
-int last_octet; // To store the identifier for this instance
-// Tally votes. Return 1 if this program is the new master, 0 otherwise;
-int newMaster(void) {
-  int i;
-  int max_votes = -1;
-  int new_master = -1;
-  for(i=1; i<IP_MAX+1; i++)
-    {
-      printf("[%d]: %d\n", i, VOTES[i]);
-      if(VOTES[i] > max_votes)
-	{
-	  new_master = i;
-	  max_votes = VOTES[i];
-	}
-      else if(max_votes == VOTES[i])
-	{
-	  if(i > new_master)
-	    {
-	      new_master = i;
-	    }
-	}
+// prototypes
+void getIPAddr(struct sockaddr_in *addr);
+void socket_transciever(int sockfd);
+
+// Globals
+int last_octet;
+char ip_str[INET_ADDRSTRLEN];
+char bcast_str[INET_ADDRSTRLEN];
+volatile unsigned char *VIC2SoftInt = NULL;
+
+void socket_transciever(int sockfd) {
+  char recvbuf[MSG_SIZE];
+  char msgbuf[MSG_SIZE];
+  struct sockaddr_in from;
+  socklen_t fromlen = sizeof(from);
+  int n, isMaster = 0, my_vote;
+  // Receieve
+  while(1)
+  {
+
+    bzero(&recvbuf, MSG_SIZE);
+    bzero(&msgbuf, MSG_SIZE);
+
+    n = recvfrom(sockfd, recvbuf, MSG_SIZE, 0, (struct sockaddr *)&from, (socklen_t *)&fromlen);
+    if(n < 0) {
+      perror("Error receiving data\n"); 
+      continue;
     }
-  if(new_master == last_octet)
-    {
-      return 1;
+    if(recvbuf[strlen(recvbuf)-1] == '\n') {
+      recvbuf[strlen(recvbuf)-1] = '\0';
     }
-  return 0;
-}
-      
+    memcpy(msgbuf, recvbuf, strlen(recvbuf));
+    printf("Received message: %s\n", msgbuf);
+    fflush(stdout);
+
+    // Check for @<note> 
+    if('@' == msgbuf[0])
+    {
+      const char notes[] = "ABCDE";
+      char c = msgbuf[1];
+      c = toupper(c);
+      int i;
+      for(i=0; i<5; i++)
+      {
+        if(notes[i] == c) { // Message received
+          // Write i to fifo -- change frequency
+          int fd = open("/dev/rtf/0", O_WRONLY); // FIFO_WRITE
+          if(fd < 0) {
+            fprintf(stderr, "Error open() rtfifo %s\n", strerror(errno));
+            return;
+          }
+          if( write(fd, (void *)&i, sizeof(i)) < 0 ) {
+            fprintf(stderr, "Error write() rtfifo %s\n", strerror(errno));
+          }
+          // Set software interrupt
+          *VIC2SoftInt |= 0x80; // Set MSB
+          if(1 == isMaster) { 
+            // Broadcast note to slaves if master
+            printf("Forwarding message: %s\n", msgbuf);
+            from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
+            if( sendto(sockfd, msgbuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+              fprintf(stderr, "sendto() %s\n", strerror(errno));
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // Check if voting is occuring 
+    else if('#' == msgbuf[0])
+    {
+      int count, vote_val, from_ip;
+      char *tok = strtok(msgbuf, ". ");
+      count = 6;
+      while(tok != NULL)
+      {
+        printf("%s\n", tok);
+        count--;
+        if(1 == count) {
+          from_ip = atoi(tok);
+        }
+        if(0 == count) {
+          vote_val = atoi(tok);
+          break;
+        }
+        tok = strtok(NULL, " .");
+      }
+
+      //printf("From ip: %d\n", from_ip);
+      //printf("Vote val: %d\n", vote_val);
+      //printf("My vote: %d\n", my_vote);
+
+      if(vote_val > my_vote) {
+        isMaster = 0;
+      }
+      else if(vote_val == my_vote) {
+        if(from_ip > last_octet) {
+          isMaster = 0;
+        }
+      }
+    }
+
+    // Check for VOTE
+    else if(0 == strncmp(msgbuf, "VOTE", 4) || 0 == strncmp(msgbuf, "vote", 4))
+    {
+      isMaster = 1;
+      char tmp[MSG_SIZE];
+      char voteBuf[MSG_SIZE] = "# ";
+      int r = rand() % (VOTE_MAX + 1 - VOTE_MIN) + VOTE_MIN;
+      my_vote = r;
+      sprintf(tmp, "%d", r);
+      strcat(voteBuf, ip_str);
+      strcat(voteBuf, " ");
+      strcat(voteBuf, tmp);
+      //printf("Vote buffer: %s\n", voteBuf);
+      // Set broadcast ip
+      from.sin_addr.s_addr = inet_addr(bcast_str);
+      printf("Sending message: %s\n", voteBuf);
+      if( sendto(sockfd, voteBuf, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+        fprintf(stderr, "sendto() %s\n", strerror(errno));
+      }
+    }
+    else if( (0 == strncmp(msgbuf, "WHOIS", 5) || 0 == strncmp(msgbuf, "whois", 5)) & (1 == isMaster) )
+    {
+      char master_str[MSG_SIZE];
+      sprintf(master_str, "Zach on board %s is the master", ip_str);
+      from.sin_addr.s_addr = inet_addr(bcast_str); // set broadcast
+      printf("Sending message: %s\n", master_str);
+      if( sendto(sockfd, master_str, MSG_SIZE, 0, (struct sockaddr *)&from, fromlen) < 0 ) {
+        fprintf(stderr, "sendto() %s\n", strerror(errno));
+      }
+    }
+
+  } // while
+} // func()
 
 int main(int argc, char **argv) {
-  int sock, n;
   struct sockaddr_in server;
-  struct sockaddr_in from;
-  struct hostent *hp = NULL;
-  unsigned long broadcast_addr = inet_addr("BROADCAST_ADDR");
-  unsigned long server_addr; 
+  int sockfd;
+  int portnum = 2000;
   int length = sizeof(server);
-  socklen_t fromlen = sizeof(struct sockaddr_in);
-  unsigned int opt_val_bool = 1; // To pass to setsockopt()
-  unsigned int isMaster = 0;
-  char buf[MSG_SIZE]; // for receive messages
-  char str_buf[MSG_SIZE]; // for sprintf
-  char tok_buf[MSG_SIZE]; // for strtok
-  char ip_str[INET_ADDRSTRLEN];
-  
-  struct timeval read_timeout = { .tv_sec = VOTE_TIMEOUT_SEC, .tv_usec = 0};
-  
+  int boolval = 1;
+  struct hostent *hp = NULL;
 
   // Check input args for port #
-  if(argc < 3) {
-    fprintf(stderr, "Usage is %s <hostname> <port>\n", argv[0]);
-    return EXIT_FAILURE;
+  if(argc < 2) {
+    fprintf(stderr, "Usage is %s hostname [port]\n", argv[0]);
+    return -1;
+  }
+  if(argc >= 3) {
+    portnum = atoi(argv[2]);
   }
 
-  // Random numbers seed
-  srand(time(NULL));
-  // Set server properties
-  server.sin_family = AF_INET;
-  // Get port # from input 
-  server.sin_port = htons(atoi(argv[2]));
-  // Get ip address by hostname
+  printf("Portnum: %d\n", portnum);
   hp = gethostbyname(argv[1]);
-  if(0 == hp) {
-    // Error
-    fprintf(stderr, "Error: unknown host\n");
-    return EXIT_FAILURE;
+
+  srand(time(NULL)); // Random numbers seed
+
+  sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if(sockfd < 0) {
+    fprintf(stderr, "socket() %s\n", strerror(errno));
   }
-  // IP Address
+
+  // Socket info
+  bzero(&server, length); // zero out struct
+  server.sin_family = AF_INET;
+  server.sin_port = htons(portnum);
   bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
-  length = sizeof(server);
+  getIPAddr(&server);
+  printf("My ip: %s\n", ip_str);
+  printf("Broadcast ip: %s\n", bcast_str);
+  server.sin_addr.s_addr = INADDR_ANY;
 
-  // Get ip address as string
-  struct sockaddr_in *ipv4Addr = (struct sockaddr_in*)&server;
-  struct in_addr ipAddr = ipv4Addr->sin_addr;
-  inet_ntop(AF_INET, &ipAddr, ip_str, INET_ADDRSTRLEN);
-  strncpy(&tok_buf, &ip_str, strlen(ip_str));
-  char *my_id = strtok(&ip_str, ".");
-  int i;
-  for(i=0; i<3; i++)
-    {
-      my_id = strtok(NULL, ".");
-    }
-  last_octet = atoi(my_id);
-  printf("My identifier: %d\n", last_octet);
+  if( bind(sockfd, (struct sockaddr *)&server, length) < 0 ) {
+    fprintf(stderr, "bind() %s\n", strerror(errno));
+  }
 
-  // Connectionless ipv4 socket (domain, type, protocol=0)
-  sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if(sock < 0)
-    {
-      // Error creating socket
-      fprintf(stderr, "Error in socket(): %s\n", strerror(errno));
-      return EXIT_FAILURE;
-    }
+  if( setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &boolval, sizeof(boolval)) < 0 ) {
+    fprintf(stderr, "setsockopt() %s\n", strerror(errno));
+  }
 
-  // bind socket to address of host + port # (command line)
-  if(bind(sock, (struct sockaddr *)&server, length) < 0 )
-    {
-      // Error binding
-      fprintf(stderr, "Error in bind(): %s\n", strerror(errno));
-      return EXIT_FAILURE;
-    }
+  int fd = open("/dev/mem", O_RDWR|O_SYNC);
+  if(fd < 0) {
+    printf("Error opening /dev/mem. Are you root?\n");
+    return(-1); // failed open
+  }
+  VIC2SoftInt = (unsigned char *) mmap(NULL, 4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0x800C0018);
+  if(MAP_FAILED == VIC2SoftInt) { 
+    printf("Unable to map memory space\n");
+  }
 
-  // set socket perms to allow broadcast
-  if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *)&opt_val_bool, sizeof(opt_val_bool)) < 0 )
-    {
-      // Error setting options
-      fprintf(stderr, "Error in setsockopt(): %s\n", strerror(errno));
-      return EXIT_FAILURE;
-    }
+  socket_transciever(sockfd);
 
-  while(1)
-    {
-      // Wait for message from client.
-       n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
-       if(n < 0) {
-	   perror("recvfrom");
-	 }
-       // DEBUG
-       printf("Received datagram. It says: %s, %d\n", buf, n);
-       if(0 == strcmp(buf, "WHOIS\n"))
-	 {
-	   bzero(buf, MSG_SIZE);
-	   printf("WHOIS ack.\n");
-	   if(isMaster)
-	     {
-	       server_addr = server.sin_addr.s_addr;
-	       server.sin_addr.s_addr = broadcast_addr;
-	       sprintf(&str_buf, "Zach on board %s is the master", ip_str);
-	       // Write message to broadcast address.
-	       // TODO change to broadcast
-	       n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&server, fromlen);
-	       if(n < 0) {
-		 perror("sendto");
-	       }
-	       server.sin_addr.s_addr = server_addr;
-	     }
-	   else // Wait for another master to reply or a VOTE
-	     {
-	       n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
-	       if(n < 0) {
-		 perror("recvfrom");
-	       }
-	       printf("Received datagram. It says: %s %d", buf, n);
-	       if(0 == strcmp(buf, "VOTE\n"))
-		 {
-		   // Clear votes
-		   memset(VOTES, 0, (IP_MAX + 1)*sizeof(int));
-		   bzero(tok_buf, MSG_SIZE);
-		   printf("Voting initiated.\n");
-		   // No master reply =>
-		   // Send and receive votes
-		   // Get random number between 1-10 for the last octet
-		   // Zeroes represent the min number
-		   int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
-		   //VOTES[r]++;
-		   sprintf(str_buf, "# 10.3.52.%d", r);
-		   // Send vote to broadcast
-		   server.sin_addr.s_addr = broadcast_addr;
-		   n = sendto(sock, &str_buf, MSG_SIZE, 0, (struct sockaddr *)&server, fromlen);
-		   if(n < 0) {
-		     perror("sendto");
-		   }
-		   
-		   // Set timeout and read votes
-		   read_timeout.tv_sec = VOTE_TIMEOUT_SEC;
-		   if(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout)) < 0) {
-		     perror("Error setting socket timeout");
-		   }
-		   do {
-		     n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
-		     // Check buf for leading '#' and parse ip
-		     if('#' == buf[0]) {
-		       printf("Vote received\n%s", buf);
-		       strncpy(&tok_buf, &buf, strlen(buf));
-		       char *vote_num = strtok(&tok_buf, ".");
-		       int i;
-		       for(i=0; i<3; i++)
-			 {
-			   vote_num = strtok(NULL, ".");
-			 }
-		       int vote_index = atoi(vote_num);
-		       VOTES[vote_index]++;
-		       printf("Vote: %d\n", vote_index);
-		     }
-		     bzero(buf, MSG_SIZE);
-		     bzero(tok_buf, MSG_SIZE);
-
-		     // Add vote
-		   } while(n > 0);
-
-		   // Disable timeout
-		   read_timeout.tv_sec = 0;
-		    if(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(struct timeval)) < 0) {
-		     perror("Error un-setting socket timeout");
-		   }
-		    // Change address back from broadcast
-		   server.sin_addr.s_addr = server_addr;
-		   // Tally votes
-		   if(newMaster())
-		     {
-		       printf("I am the new master\n");
-		       isMaster = 1;
-		     }
-		 } // Voting not initiated
-		else
-		  {
-		    // Master replied
-		  }
-	     }
-	 } // endifwhois
-    } // end while
-
-return EXIT_SUCCESS;
-
+  return 0;
 }
+
+// Get the current machine ip and the broadcast ip as a string
+// And the last octet as an integer. Put them all in global vars.
+void getIPAddr(struct sockaddr_in *addr) { 
+  char buf[INET_ADDRSTRLEN] = { 0 };
+  if(NULL == addr) {
+    return; 
+  }
+  // Get ip address as string
+  struct in_addr ipAddr = addr->sin_addr;
+  inet_ntop(AF_INET, &ipAddr, ip_str, INET_ADDRSTRLEN);
+  // Get broadcast address as string
+  inet_ntop(AF_INET, &ipAddr, bcast_str, INET_ADDRSTRLEN);
+  int len = strlen(bcast_str);
+  bcast_str[len] = '5';
+  bcast_str[len-1] = '5';
+  bcast_str[len-2] = '2';
+  memcpy(buf, ip_str, strlen(ip_str));
+  char *my_ip = (char *)&buf;
+  char *tok = strtok(my_ip, ". ");
+  int count = 5;
+  while(tok != NULL)
+  {
+    count--;
+    if(1 == count)
+    {
+      last_octet = atoi(tok);
+    }
+    tok = strtok(NULL, ". ");
+  }
+}
+
+// vim: ts=2 sw=2 et 
 #+END_SRC
