@@ -86,7 +86,7 @@ static void button_handler(unsigned int irq_num, void *cookie) {
 			printk("Button %d pressed\n", i);
 			task_period = (1+i)*period;
 			rtf_put(FIFO_WRITE, &i, sizeof(i)); // Write 'note' to FIFO 
-			rt_task_make_periodic(&t1, 0*period, task_period);
+			rt_task_make_periodic(&t1, rt_get_time(), task_period);
 			break;
 		}
 	}
@@ -154,7 +154,7 @@ int init_module(void) {
 	rt_set_periodic_mode();
 	period = start_rt_timer(nano2count(1000000));
 	rt_task_init(&t1, (void *)play_speaker, 0, 256, 0, 0, 0);
-	rt_task_make_periodic(&t1, 0*period, period);
+	rt_task_make_periodic(&t1, rt_get_time(), period);
 
 	if(rtf_create(FIFO_READ, sizeof(int)) < 0) {
 		printk("Unable to create fifo\n");
